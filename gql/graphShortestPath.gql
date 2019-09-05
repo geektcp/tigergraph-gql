@@ -1,7 +1,7 @@
+/*
+    shortest path with advanced filter
+*/
 CREATE QUERY graphShortestPath(String gdbQuery) FOR GRAPH work_graph {
-    /*
-        shortest path with advanced filter
-    */
     JSONOBJECT filter_object, filter_start_vertex, filter_end_vertex, filter_tmp;
     INT filter_depth, filter_maxSize, i, j;
     JSONARRAY filter_start_vertices,filter_end_vertices, filter_vertex_types, filter_edge_types;
@@ -21,7 +21,7 @@ CREATE QUERY graphShortestPath(String gdbQuery) FOR GRAPH work_graph {
     SetAccum<STRING> @@objectKeys;
     SetAccum<STRING> @@objectSchemas;
 	
-	  SetAccum<VERTEX> @childsVetex;
+	SetAccum<VERTEX> @childsVetex;
     SetAccum<EDGE> @childsEdges;
     SetAccum<VERTEX> @@vertexes;
     SetAccum<EDGE> @@edges;
@@ -31,9 +31,8 @@ CREATE QUERY graphShortestPath(String gdbQuery) FOR GRAPH work_graph {
     SetAccum<VERTEX> @@tmppoint;
     SetAccum<VERTEX> @@tmpkeys;
      
-	  OrAccum @@found  = false;
-	
-    // PRINT gdbQuery;
+	 OrAccum @@found  = false;
+
     filter_object = parse_json_object( gdbQuery );
     IF(filter_object.containsKey("startVertices")) THEN filter_start_vertices = filter_object.getJsonArray("startVertices"); END;
     IF(filter_object.containsKey("endVertices")) THEN filter_end_vertices = filter_object.getJsonArray("endVertices"); END;

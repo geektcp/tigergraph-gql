@@ -1,4 +1,3 @@
-USE GRAPH %s
 CREATE QUERY graphFullPath() FOR GRAPH %s {
     VERTEX startpoint;
     VERTEX endpoint;
