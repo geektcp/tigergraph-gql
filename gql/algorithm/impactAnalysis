@@ -1,0 +1,78 @@
+create query impactAnalysis(set<vertex<site>> affectedSites, uint maxDepth) for graph demo_graph
+{
+  /*
+    Start from multiple input affected sites, return the impacted site-product pairs. The impacted site-product pairs will be indentified from two paths, one is site-(delivery)-site relationship. Another one is site-(produce)-product-(use)-product relationship. Since not nessesarily all product belongs to a site is getting impacted. To calculte the subset we need infomation from both paths. That is the impacted product needs to use another impacted product delivered from a impacted site. This will require both delivery relationship and dependency relationship between products. Because a delivered product may not be used, a impacted product being used may not delivered from the very impacted site.
+
+    Sample input:
+    affectedSites: site5
+    maxDepth: 10
+  */
+
+   typedef tuple<string siteName, string  prodName> spPair;
+
+   SetAccum<spPair> @pairSet;
+
+   // products a site that has been affected
+   SetAccum<string> @affectedProd;
+
+   // number of iteration
+   SumAccum<int> @@iteration = 0;
+
+   // storing the result for unfinished goods
+   SetAccum<edge> @@resultSet;
+
+   // for pass along the edge info for visualization
+   SetAccum<edge> @edgeMsgSet;
+
+   effectedSite = {affectedSites};
+
+   while (effectedSite.size() > 0) limit maxDepth do
+
+     // get the impacted products from the impacted sites
+     effectedProduct = select p
+                       from effectedSite:s -(produce:e)-> product:p
+                       where @@iteration == 0 or s.@affectedProd.contains(p.name) == true
+                       accum p.@pairSet += spPair(s.name, p.name)
+                             // we assume all of the products got impacted from the input sites
+                             ,case when @@iteration == 0 then
+                                 s.@affectedProd += p.name
+                                 ,@@resultSet += e
+                             end
+     ;
+
+     // from the impacted products get its downsteam products
+     downStreamProd = select p
+                      from effectedProduct:ep -(usedBy:e) -> product:p
+                      accum p.@pairSet += ep.@pairSet
+                            ,p.@edgeMsgSet += e
+     ;
+
+     // find the impacted sites from the previous effectedSite set
+     effectedSite = select st
+                    from effectedSite:s -(deliver:e) -> site:st
+                    accum
+                      case when s.@affectedProd.contains(e.itemId) then
+                        st.@pairSet += spPair(s.name,e.itemId)
+                        ,st.@edgeMsgSet += e
+                      end
+     ;
+
+     // keep the impacted sites that are has deliveted imapcted product that is delivered
+     // from a upstream site, and they also use this produt in producting their product
+     effectedSite = select st
+                        from effectedSite:st -(produce:e) -> product:p
+                        where COUNT(st.@pairSet INTERSECT p.@pairSet) > 0
+                        accum
+                            st.@affectedProd += p.name
+                            ,@@resultSet += e
+                            ,@@resultSet += st.@edgeMsgSet
+                            ,@@resultSet += p.@edgeMsgSet
+                        post-accum
+                            p.@pairSet.clear()
+     ;
+
+     @@iteration += 1;
+  end;
+
+  print @@resultSet;
+}

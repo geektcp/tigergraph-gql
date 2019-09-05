@@ -1,0 +1,156 @@
+CREATE QUERY FindPromisingStartupBasedOnBoard(INT K1, INT K2, STRING cutoffRound, INT pastNYears) FOR GRAPH CrunchBasePre_2013 {
+/*
+	DISCLAIMER: Data is from Crunchbase 2013 Snapshot under the Creative Commons Attribution License [CC-BY].
+
+  Suppose a person want to join a startup that has a good board memeber.
+  In this query, we search crunchbase data, and target those board members who have served on startup
+	boards that have successful exits (means they are good) AND these people belong to a currently rich 
+	financial organization (means they are active), and look at what other pre-IPO startups they are directing now. 
+
+  Brief steps:
+  1. Find people who work for top K1 financial organizations that have raised most money in past N years.
+  2. Find the top K2 persons who has the most board experience of succesful startups. 
+  3. Display the current startups whose board have the people discovered in step 2.  
+  4. We can further select the startup based on an input round cutoff. 
+
+  Sample Input:
+  pastNYears means year restriction, K1 means top K1 financial organizations, K2 means top K2 people.
+	pastNYears: 15,  K1: 30,  K2: 2,  cutoffRound: b;
+	NpastNYears 15,  K1: 8,   K2: 1,  cutoffRound: a;
+  pastNYears: 10,  K1: 10,  K2: 3,  cutoffRound: d;
+  pastNYears: 20,  K1: 20,  K2: 1,  cutoffRound: b;
+*/
+  TYPEDEF TUPLE<VERTEX fOrg, DOUBLE amounts> rank;
+  TYPEDEF TUPLE<VERTEX people, INT counts> tmost;
+  HeapAccum<rank>(K1, amounts DESC) @@topF;
+  HeapAccum<tmost>(K2, counts DESC) @@topP;
+  MapAccum<STRING, DOUBLE> @@currency2USD;
+  ListAccum<STRING> @@codeList;
+  ListAccum<STRING> @@nptList;
+  ListAccum<DATETIME> @time;
+  SumAccum<DOUBLE> @amount;
+  SumAccum<INT> @count;
+  OrAccum @visited = FALSE;
+  OrAccum @belongto = FALSE;
+	OrAccum @potential = FALSE;
+  SetAccum<VERTEX> @@forgs;
+  SetAccum<VERTEX> @@pres;
+  SetAccum<VERTEX> @@vsets;
+  SetAccum<EDGE> @@esets;
+  SetAccum<VERTEX> @@csets;
+  SetAccum<VERTEX> @@tmp;
+  SetAccum<VERTEX> @@psets;
+  SetAccum<VERTEX> @myset;
+  DATETIME present;
+  DATETIME none;
+  SumAccum<INT> @total;
+  SumAccum<INT> @before;
+
+  present = to_datetime("2013-12-31 23:59:59");
+  none = to_datetime("1970-01-01 00:00:00");
+  @@currency2USD += ("USD" -> 1);
+  @@currency2USD += ("AUD" -> 1.28);
+  @@currency2USD += ("CAD" -> 1.25);
+  @@currency2USD += ("EUR" -> 0.85);
+  @@currency2USD += ("GBP" -> 0.76);
+  @@currency2USD += ("JPY" -> 112.84);
+  @@currency2USD += ("SEK" -> 8.14);
+
+  @@codeList = ["angel", "seed", "a", "b", "c", "d", "e", "f", "g"];
+  FOREACH i in range[0, @@codeList.size()-1] DO
+      IF @@codeList.get(i) == lower(trim(cutoffRound)) THEN
+          @@nptList += @@codeList.get(i);
+          BREAK;
+      ELSE  @@nptList += @@codeList.get(i);
+      END;
+  END;
+
+  Orgs (ANY) = {financialORG.*};
+  // find top k financial organizations who raised most money in past N years
+  Orgs = SELECT tgt
+        FROM Orgs: s - (financial_funds: e) - funds: tgt
+        WHERE datetime_diff(present, tgt.funded_at) <= pastNYears*31536000
+        ACCUM s.@amount += (tgt.raised_amount / @@currency2USD.get(tgt.raised_currency_code)), tgt.@visited = TRUE/*,
+              @@d += tgt.created_at, @@t += datetime_diff(present, tgt.created_at)*/
+        POST-ACCUM @@topF += rank(s, s.@amount);
+
+  FOREACH item IN @@topF DO
+      @@forgs += item.fOrg;
+  END;
+
+  TopORGs = {@@forgs};
+  TopORGs = SELECT tgt
+            FROM TopORGs: tgt
+            POST-ACCUM tgt.@visited = TRUE;
+
+  // tag ipo time or acquisition time on all companies
+  Pre (ANY) = {company.*};
+  Pre = SELECT tgt
+        FROM Pre:s - ((company_ipo | acquired_by): e) - (IPO | company): tgt
+        ACCUM CASE WHEN e.type == "company_ipo" AND datetime_diff(tgt.public_at, none) != 0 THEN
+                    s.@time += tgt.public_at
+              END,
+              CASE WHEN e.type == "acquired_by" AND datetime_diff(e.acquired_at, none) != 0 THEN
+                    s.@time += e.acquired_at
+              END;
+
+  // find people who work for the top k financial organizations
+  S0 = SELECT tgt
+          FROM TopORGs: s - (work_for_fOrg: e) - person: tgt
+          ACCUM tgt.@belongto = TRUE;
+
+  // find selected companies whose board has person in S1
+  S1 = SELECT tgt
+      FROM S0: s - (work_for_company: e) - company: tgt
+      WHERE (e.title LIKE "%Board%" OR e.title LIKE "%board%") AND tgt.@time.size() != 0 AND datetime_diff(e.start_at, none) != 0
+      ACCUM IF datetime_diff(tgt.@time.get(0), e.start_at) > 0 THEN
+                @@csets += tgt, tgt.@myset += s
+            END;
+
+  // count successful exits for each discovered person and do the ranking
+  S2 (ANY) = {@@csets};
+  S2 = SELECT tgt
+        FROM S2 :s - (work_for_company :e) - person: tgt
+        WHERE (e.title LIKE "%Board%" OR e.title LIKE "%board%") AND tgt.@belongto == TRUE
+        ACCUM tgt.@amount += 1
+        POST-ACCUM @@topP += tmost(tgt, tgt.@amount);
+  FOREACH item in @@topP DO
+      @@psets += item.people;
+  END;
+
+  // find rest companies without ipo or acquisition that the person serves
+  S3 (ANY) = {@@psets};
+  S3 = SELECT tgt
+      FROM S3: s - (work_for_company: e) - company: tgt
+      WHERE (e.title LIKE "%Board%" OR e.title LIKE "%board%") AND e.start_at != none AND tgt.status == "operating" AND tgt NOT IN @@csets;
+
+  // find other pre-IPO startups that top persons are directing now before certain round
+  S4 = SELECT tgt
+      FROM S3: s - (company_funding_rounds: e) - funding_rounds: tgt
+      ACCUM s.@total += 1,
+            IF @@nptList.contains(tgt.funding_round_code)
+              THEN s.@before += 1, tgt.@visited = TRUE
+            END
+      POST-ACCUM @@tmp += s;
+  S5 = {@@tmp};
+  S5 = SELECT tgt
+      FROM S5: tgt
+      WHERE tgt.@before == tgt.@total
+      ACCUM tgt.@potential = TRUE, @@csets += tgt;
+
+  // back traverse to find paths displayed in the subgraph
+  Paths (ANY) = {@@psets};
+  WHILE TRUE LIMIT 2 DO
+      Paths = SELECT tgt
+        FROM Paths :s - ((company_funding_rounds | acquired_by | company_ipo | work_for_company | work_for_fOrg | financial_funds): e) - :tgt
+        WHERE (e.type == "work_for_company" AND ((datetime_diff(e.start_at, none) != 0 AND tgt.@myset.contains(s)) OR tgt.@potential == TRUE)) OR
+            ((e.type == "work_for_fOrg" OR e.type == "financial_funds" OR e.type == "company_funding_rounds") AND tgt.@visited == TRUE)
+            OR e.type == "company_ipo" OR e.type == "acquired_by"
+          ACCUM @@vsets += tgt, @@esets += e;
+  END;
+  Result1 = {@@psets};
+  Result2 = {@@vsets};
+  PRINT Result1;
+  PRINT Result2;
+  PRINT @@esets;
+}

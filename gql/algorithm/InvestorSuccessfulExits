@@ -1,0 +1,98 @@
+CREATE QUERY InvestorSuccessfulExits(String investorName, String investorType, int years) FOR GRAPH CrunchBasePre_2013 {
+    /*
+ DISCLAIMER: Data is from Crunchbase 2013 Snapshot under the Creative Commons Attribution License [CC-BY].
+
+ This query aims to find a given investor's achievements measured by their succesful investment
+ exits (IPO, acquisition) within a fixed number of years.
+ E.g.  If fixed number of years is 4. We evaluate the investor based on how many IPOs
+ happened within 4 years after their investments.
+
+ Given an investor name, input type (company/person/fiancialORG), and maximum years before
+ the investment exit event.
+
+ First step, find the funding rounds participated by the investor.
+ Second step, find the companies funded by the rounds discovered in the first step.
+ Third step, find the IPO info (if exists) of the companies discovered in the second step
+
+ The traversal path looks like below.
+  company/fiancialORG/person -> funding_rounds -> company -> IPO
+
+  Sample input:
+    1.  investorName:  Google;          years: 5     investorType: company;
+    2.  investorName:  Accel Partners;  years: 5     investorType: financialORG;
+    3.  investorName:  Reid Hoffman;    years: 10    investorType: person;
+*/
+    //declare set to store vertex and edge
+    SetAccum<vertex> @@verSet;
+    SetAccum<vertex> @@addV;
+    SetAccum<edge> @@edgeSet;
+    SetAccum<vertex> @parentV;
+    SetAccum<edge> @parentE;
+    //declare variable to store the earliest time invested by this investor
+    MinAccum<datetime> @investedTime;
+    //declare variable to tag visited or not
+    OrAccum @visited = false;
+    //declare a default time to investedTime
+
+    //assign different variable according to the input type
+    start = {};
+    case
+        when lower(trim(investorType)) == "person" then start = {person.*};
+        when lower(trim(investorType)) == "company" then start = {company.*};
+        when lower(trim(investorType)) == "financialorg" then start = {financialORG.*};
+  end;
+
+    //find the investor whose name is input
+    //and assign the "Start" variable, which is a SET.
+    Start (ANY) = select c
+                    from start:c
+                    where (c.type == "person" and lower(trim(c.fullname)) == lower(trim(investorName))) or lower(trim(c.name)) == lower(trim(investorName))
+                    accum c.@visited = true;
+    print Start;
+
+    //to get invested funding rounds (investor -> funding_rounds)
+    Start = select tgt
+                from Start:s-((investment_from_company|investment_from_person|investment_from_financialORG):e)-funding_rounds:tgt
+                accum
+                    tgt.@parentE += e, tgt.@visited = true,
+                    case
+                        //update investedTime
+                        when not tgt.@visited then tgt.@investedTime = tgt.funded_at, tgt.@parentV += s
+                        else tgt.@investedTime += tgt.created_at, tgt.@parentV += s
+                    end;
+
+    //To get invested companies (funding_rounds -> company)
+    Start = select tgt
+                from Start:s-((company_funding_rounds):e)-company:tgt
+                accum
+                    tgt.@parentV += s, tgt.@parentE += e, tgt.@investedTime = s.@investedTime;
+
+    //To get company IPOs (company -> IPO)
+    Start = select tgt
+                from Start:s-((company_ipo|acquired_by):e)-:tgt
+                accum
+                    tgt.@parentV += s, tgt.@parentE += e,
+                    //select the IPO which created within input years aftering being invested
+                    if (e.type == "company_ipo" and datetime_diff(tgt.public_at, s.@investedTime) > 0 and datetime_diff(tgt.public_at, s.@investedTime) <= years*31556952)
+                        or (e.type == "acquired_by" and datetime_diff(e.acquired_at, s.@investedTime) > 0 and datetime_diff(e.acquired_at, s.@investedTime) <= years*31556952)
+                            then @@addV += tgt
+                    end;
+
+    @@verSet += @@addV;
+    Start = {@@addV};
+    @@addV.clear();
+
+    // trace back to the source senders from the vertices that joint multiple paths
+    while(Start.size()>0) do
+            Start = select s
+                    from Start:s
+                    accum @@addV += s.@parentV, @@edgeSet += s.@parentE;
+            @@verSet += @@addV;
+            Start = {@@addV};
+            @@addV.clear();
+    end;
+    //output the result
+    Start = {@@verSet};
+    print Start;
+    print @@edgeSet;
+}

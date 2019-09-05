@@ -1,0 +1,50 @@
+CREATE OR REPLACE QUERY SameRecieverSender(vertex<Transaction> transaction) FOR GRAPH AntiFraud {
+/*
+ This query is used to find out whether a user conduct fradulent transaction for themselves
+ via fake accounts.
+
+ Given an input transaction, return true when its reciever and sender are connected via
+ Device_Token and Payment_Instrument within 4 steps.
+
+  Sample input
+  transaction: any integer between 1 and 800,000,000
+*/
+  OrAccum<bool> @fromReciever, @fromSender;
+  OrAccum<bool> @@isSame;
+
+  SetAccum<edge> @@edgeSet;
+
+  Start (ANY) = {transaction};
+
+  // get the sender and reciever
+  Start = SELECT t FROM Start:s-((User_Recieve_Transaction_Rev|User_Transfer_Transaction_Rev):e)-:t
+          ACCUM
+            // mark the sender and reciver according to the edge type
+            case when e.type == "User_Recieve_Transaction_Rev" then
+              t.@fromReciever += true
+            else
+              t.@fromSender += true
+            end
+            ,@@edgeSet += e
+  ;
+
+  // traverse for 4 steps, or the paths of sender and reciever meets each other
+  WHILE Start.size() > 0 AND @@isSame == false LIMIT 4 DO
+    Start = SELECT t FROM Start:s-((User_to_Device|User_to_Payment):e)-:t
+            // do not traverse the vertexes that were visited
+            WHERE t.@fromReciever == false AND t.@fromSender == false
+            ACCUM t.@fromReciever += s.@fromReciever,
+                  t.@fromSender += s.@fromSender
+                  ,@@edgeSet += e
+            POST-ACCUM
+              // when two paths meets in the middle
+              CASE WHEN t.@fromReciever == true AND t.@fromSender THEN
+                @@isSame += true
+              END
+    ;
+  END;
+
+  // output the result
+  PRINT @@isSame;
+  PRINT @@edgeSet;
+}

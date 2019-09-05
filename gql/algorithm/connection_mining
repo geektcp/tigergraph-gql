@@ -1,0 +1,126 @@
+create query connection_mining (vertex<citizen> A, vertex<citizen> B, int k) for graph connectivity
+{
+  /***********************************
+   * Variables for phase one
+   ***********************************/
+   SumAccum<int> @score = 0;
+   OrAccum @knowA = false, @knowB = false;
+   SetAccum<edge> @evidence, @@edgeSet;
+   SetAccum<vertex> @@verSet;
+
+   bool isFirstIter = true;
+
+   L0 (ANY) = {A,B};
+
+  /**************************
+   * Iteration one
+   * 1. find all person relates to A or B
+   * 2. output top k people relates both A and B
+   * Iteration two
+   * 1. Start from the person knows only A or B
+   * 2. Find those people who knows only A knows a person that knows only B
+   * 3. Find those people who knows only B knows a person that knows only A
+   * 4. output top k people from 2 and 3
+   **************************/
+   WHILE true LIMIT 2 DO
+     // Data Initialize
+     L0 = SELECT v
+     FROM L0:v
+     POST-ACCUM
+       CASE WHEN v == A THEN
+         v.@knowA += true
+       END
+       ,CASE WHEN v == B THEN
+         v.@knowB += true
+       END
+       ,v.@score = 1
+     ;
+
+	  L1 (ANY) = L0;
+
+    // do it twice, go two steps to find the related citizens via
+    // hotel, flight, train, bus, case
+    log(true, " hotel, flight, train, bus, case");
+    WHILE true LIMIT 2 DO
+      L1 = SELECT t
+           FROM L1:s-((address_own|hotel_stay|flight_ride|train_ride|bus_ride|case_involved):e)-:t
+           WHERE t.@score == 0
+           ACCUM t.@knowA += s.@knowA
+                 ,t.@knowB += s.@knowB
+                 ,t.@score += s.@score
+                 ,t.@evidence += s.@evidence
+                 ,t.@evidence += e
+      ;
+      //print A;
+    END;
+
+    RELATED = L1;
+    L1 = L0;
+
+    // go 4 steps,
+    // A/B-->PHONE NUMBER-->PHONE CALL-->PHONE NUMBER-->RELATED PEOPLE
+    // A/B-->BANK ACCOUNT-->MONEY TRANS-->BANK ACCOUNT-->RELATED PEOPLE
+    log(true, "PHONE CALL, MONEY TRANS");
+    L1 = SELECT t
+           FROM L1:s-((phone_own|bank_account_own):e)-:t
+           WHERE t.@score == 0
+           ACCUM t.@knowA += s.@knowA
+                 ,t.@knowB += s.@knowB
+                 ,t.@score += s.@score
+                 ,t.@evidence += s.@evidence
+                 ,t.@evidence += e
+    ;
+    WHILE true LIMIT 2 DO
+      L1 = SELECT t
+           FROM L1:s-((money_transfer|phone_num_to_call):e)-:t
+           WHERE t.@score == 0
+           ACCUM t.@knowA += s.@knowA
+                 ,t.@knowB += s.@knowB
+                 ,t.@score += s.@score
+                 ,t.@evidence += s.@evidence
+                 ,t.@evidence += e
+      ;
+    END;
+    L1 = SELECT t
+           FROM L1:s-((phone_own|bank_account_own):e)-:t
+           WHERE t.@score == 0
+           ACCUM t.@knowA += s.@knowA
+                 ,t.@knowB += s.@knowB
+                 ,t.@score += s.@score
+                 ,t.@evidence += s.@evidence
+                 ,t.@evidence += e
+    ;
+
+
+    // add the newly found citizens to the related set
+    RELATED = RELATED UNION L1;
+
+    log(true, "get COMMON_AB");
+    // Extract the people having common relations
+    // and keep the top k
+    COMMON_AB = SELECT t
+         FROM RELATED:t
+         WHERE t.@knowA == true AND t.@knowB == true
+         ORDER BY t.@score
+         LIMIT k
+    ;
+
+    COMMON_AB = SELECT s from COMMON_AB:s
+                ACCUM @@edgeSet += s.@evidence
+    ;
+
+    IF isFirstIter == true THEN
+      // find the person that knows only A or B
+      L0 = RELATED MINUS COMMON_AB;
+			log(true,L0.size());
+    END;
+    isFirstIter = false;
+  END;
+
+  PRINT @@edgeSet;
+  getVertexesFromEdge(@@edgeSet, @@verSet);
+  Start = {@@verSet};
+  Start = SELECT s FROM Start:s
+          POST-ACCUM s.@evidence.clear();
+  PRINT Start;
+}

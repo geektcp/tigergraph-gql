@@ -1,0 +1,15 @@
+create query showWholeGraph () for graph demo_graph
+{
+// print all vertexes and edges
+  SetAccum<edge> @@displaySet;
+
+  Start = {ANY};
+
+  print Start;
+
+  Start = select s
+          from Start:s-((prodOrder|prodStocking|usedBy|produce|deliver):e)-:t
+          accum @@displaySet += e;
+
+  print @@displaySet;
+}

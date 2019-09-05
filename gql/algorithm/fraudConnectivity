@@ -1,0 +1,39 @@
+CREATE OR REPLACE QUERY fraudConnectivity (VERTEX<User> inputUser, FLOAT trustScore) FOR GRAPH AntiFraud {
+/*
+  This query finds all connect users/payment cards/device that has low credit score.
+
+  Starting with a user X find all other users connected to
+  X through device token, payment instrument connected via transactions in 3 steps
+
+  Sample input
+  inputUser: any integer between 1 and 80,000,000
+  trustScore: any float number (e.g. 0.1)
+*/
+
+  OrAccum<bool> @visited;
+  SumAccum<int> @@result;
+  SetAccum<edge> @@visResult;
+
+  Start (_) = {inputUser};
+
+  // keep traverse for 3 steps
+  WHILE Start.size()>0 limit 3 DO
+    Start = SELECT t
+         FROM Start:s-(:e)-:t
+         // sample clause for better visualization result
+         SAMPLE 15 EDGE WHEN s.outdegree() >= 20
+         WHERE t.@visited == false AND t != inputUser
+         ACCUM
+           @@visResult += e
+         POST-ACCUM
+           CASE WHEN t.trust_score < trustScore THEN
+             @@result += 1
+           END,
+           t.@visited += true
+
+    ;
+  END;
+
+  print @@result;
+  print @@visResult;
+}

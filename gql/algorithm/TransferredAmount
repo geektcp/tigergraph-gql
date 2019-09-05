@@ -1,0 +1,45 @@
+CREATE OR REPLACE QUERY TransferredAmount (vertex<User> sender, dateTime startDate=to_dateTime("2000/12/31"), dateTime endDate=to_dateTime("2020/12/31")) for GRAPH AntiFraud{
+/**
+  This query answer the question that given a user, find out how much money has been transferred out from
+  her connected users within a date range.
+
+  1) Start from an user, find all other users connected via Device_Tokent or Payment_Instrument within 4 steps.
+  2) Then start from all the connected users, find transferred transactions between input start date and end date.
+  3) Calculate total transfered money amount of the transcations collected in step 2)
+
+  Sample input
+  sender : any random integer between 1 and 80,000,000
+  endDate : 2017/11/11
+  startDate : 2000/11/11
+*/
+  SumAccum<float> @@transAmount;
+  OrAccum<bool> @visited;
+  // the iteration number
+  int iterNum = 0;
+  SetAccum<edge> @@edgeSet;
+
+  Start (ANY) = {sender};
+
+  // from the input user, go 4 steps with a while loop to find her connected users.
+  WHILE (Start.size() > 0) limit 4 DO
+    Start = select t from Start:s-((User_to_Device|User_to_Payment):e)-:t
+            where t.@visited == false AND (t.type != "User" OR t != sender)
+            ACCUM
+              @@edgeSet += e
+            POST-ACCUM
+              t.@visited += true
+    ;
+
+    // collect the transferred money number for the users found in 2nd and 4th iteration
+    case when iterNum%2 == 1 then
+      tmp = select s from Start:s-(User_Transfer_Transaction:e)-:t
+            where epoch_to_datetime(t.ts) < endDate AND epoch_to_datetime(t.ts) > startDate
+            accum @@transAmount += t.amount,
+                  @@edgeSet += e;
+    end;
+    iterNum = iterNum + 1;
+  END;
+
+  print @@transAmount;
+  print @@edgeSet;
+}

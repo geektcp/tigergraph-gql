@@ -1,0 +1,51 @@
+CREATE QUERY KeyRoleDiscovery(STRING companyName, INT k) FOR GRAPH CrunchBasePre_2013 {
+/*
+	  DISCLAIMER: Data is from Crunchbase 2013 Snapshot under the Creative Commons Attribution License [CC-BY].
+
+	  This query aims to find key roles of the input company and its parent companies (those investors or acquirer).
+	  Given a  company name companName, return K-step subgraph, which displays all the key roles (CEO, founder, board 		director, executive, etc.)
+	  of the companies on the k-step subgraph.
+
+	  Sample Input:
+	  companyName: LinkedIn			k: 2;
+	  companyName: Alibaba			k: 3;
+	  companyName: Weardrobe,		k: 4;
+	  companyName: LuckyCal,		k: 8;
+	  companyName: ShowMe,			k: 6;
+    companyName: FriendFeed,	k: 5;
+*/
+	OrAccum @seen;
+	SetAccum<VERTEX> @@vertices;
+	SetAccum<EDGE> @@edges;
+	DATETIME present;
+
+	present = to_datetime("1970-01-01 00:00:00");
+  companies = {company.*};
+
+  	// find the company whose name is the input string
+	Start (ANY) = SELECT tgt
+				FROM companies : tgt
+				WHERE lower(trim(tgt.name)) == lower(trim(companyName))
+				ACCUM @@vertices += tgt
+				POST-ACCUM tgt.@seen = TRUE;
+
+	// find all key roles and investor/acquirer company's key roles in k-step
+	WHILE TRUE LIMIT k DO
+		Start = SELECT tgt
+				FROM Start: s - ((invested_by_company | acquired_by | work_for_company) :e) - (company | person):tgt
+				WHERE tgt.@seen == FALSE AND s.type != "person" AND
+							(
+								(e.type == "work_for_company" AND (e.title LIKE "%founder%" OR e.title LIKE "%Founder%" OR e.title LIKE "%CEO%" OR e.title LIKE "% ceo%" OR e.title LIKE "%CTO%" OR e.title LIKE "% cto%" OR ((e.title LIKE "%oard%irectors%" OR e.title LIKE "%xecutive%") AND datetime_diff(e.end_at, present) == 0))) OR
+							  e.type == "invested_by_company" OR e.type == "acquired_by"
+							)
+				ACCUM @@vertices += tgt, @@edges += e
+				POST-ACCUM tgt.@seen = TRUE;
+	END;
+	IF @@vertices.size() != 0 THEN
+			results = {@@vertices};
+			print results;
+			print @@edges;
+	ELSE
+			PRINT "Can't find any companies or people have key relations with this company in max steps.";
+	END;
+}

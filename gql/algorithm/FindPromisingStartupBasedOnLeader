@@ -1,0 +1,181 @@
+CREATE QUERY FindPromisingStartupBasedOnLeader(String roundStage, int k, String sector) FOR GRAPH CrunchBasePre_2013 {
+    /*
+ DISCLAIMER: Data is from Crunchbase 2013 Snapshot under the Creative Commons Attribution License [CC-BY].
+
+ This query is to help people find the top k promising startups led by sucessful founders,
+ within a round cutoff and sector filtering.
+ E.g.  If top k is 3, round cutoff is "c", and indurstry sector is "software", we evaluate the company
+ based on how many IPOs happened after its founders' contribution to their past companies.
+
+ Given a round_stage, company_sector, and top k to find,
+ Step:
+    (1) find all companies has IPOed or got Acquired.
+    (2) find employees who contributed to the companies in step(1) for IPOed/Acquired.
+    (3) find startups whose founders have worked for the companies in step(1) before.
+    (4) select startups based on the input round cutoff and category sector.
+    (5) Find the top K companies whose founders have the most successful trails.
+
+    Path:
+    funding_rounds -> company (check IPO/acquired) -> person -> company -> IPO/acquired
+
+    Sample input
+        1.  roundStage: c       k: 3     sector: software
+        2.  roundStage: angel   k: 5     sector: mobile
+        3.  roundStage: c       k: 3     sector: games_video
+    */
+    //declare tuple to combine the information, with relevant company and it's IPO/acquired numbers
+    typedef tuple<vertex<company> company, int score> scoreResults;
+    //declare heap to keep the top k companies
+    HeapAccum<scoreResults>(k,score desc) @@topScoreResults;
+
+    //declare set to store vertex and edge
+    SetAccum<vertex> @@tempV;
+    SetAccum<vertex> @@verSet;
+    SetAccum<edge> @@edgeSet;
+    SetAccum<vertex> @parentV;
+    SetAccum<edge> @parentE;
+    SetAccum<String> @@roundSet;
+
+    //decalre variable to record IPO/acquired numbers
+    SumAccum<int> @num;
+    //declare variable to tag the vertex
+    MinAccum<datetime> @successTime;
+    AndAccum @startup = true;
+    AndAccum @selectCom = true;
+    //declare map to store the pair information with vertex and the datetime limitation
+    MapAccum<vertex<person>, MapAccum<vertex<company>, datetime>> @@beforeWorkTime;
+    MapAccum<vertex<person>, MapAccum<vertex<company>, edge>> @@beforeWorkEdge;
+    ListAccum<vertex<company>> @companyList;
+
+    //declare list for checking roundStage
+    ListAccum<String> @@times;
+    int index = 8;
+
+    @@times = ["angel","seed","a","b","c","d","e","f","g"];
+    //get the roundStage index
+    foreach i in range[0,@@times.size()-1] do
+        if(roundStage == @@times.get(i)) then index = i;
+        else if(i > index) then @@roundSet += @@times.get(i);
+        end;
+    end;
+
+    IPOs = {IPO.*};
+    companies = {company.*};
+
+    //1.find all companies has IPOed/Acquired.
+    //company <- IPO
+    B11 = select c
+            from IPOs:i-(company_ipo:e)->company:c
+            //filter null time
+            where datetime_diff(i.public_at,to_datetime("1970-01-01 00:00:00")) != 0
+            accum
+                c.@parentV += i, c.@parentE += e, c.@successTime = i.public_at, c.@startup += false;
+    //company <- acquire
+    B12 = select c
+            from companies:s-(acquire:e)->company:c
+            //filter null time
+            where datetime_diff(e.acquired_at,to_datetime("1970-01-01 00:00:00")) != 0
+            accum
+                c.@parentV += s, c.@parentE += e, c.@successTime = e.acquired_at, c.@startup += false;
+
+    B1 = B11 union B12;
+
+    //filter companies according to roundStage cutoff
+    Startup = companies minus B1;
+    Filt = select f
+                from Startup:c-(company_funding_rounds:e)->funding_rounds:f
+                accum
+                    case when @@roundSet.contains(f.funding_round_code) then c.@selectCom += false end;
+
+    //2. find employees who contributed to the companies in step(1) for IPOed/Acquired.
+    B2 = select p
+            from B1:c-(work_for_company:e)->person:p
+            where datetime_diff(e.start_at,to_datetime("1970-01-01 00:00:00")) != 0 and datetime_diff(e.end_at,to_datetime("1970-01-01 00:00:00")) != 0 and datetime_diff(e.start_at,c.@successTime) < 0
+            accum
+                //p.@parentV += c,
+                @@beforeWorkEdge += (p -> (c -> e)),
+                @@beforeWorkTime += (p -> (c -> e.end_at));
+
+    //3. find startups whose founders have worked for the companies in step(1) before.
+    //4. select startups based on the input round cutoff and category sector.
+    B3 = select c
+            from B2:p-(work_for_company:e)->company:c
+            where c.@startup and c.@selectCom and c.status != "acquired" and c.status != "ipo"
+                    and e.title like "%ounder%"
+                    and lower(trim(c.category_code)) == lower(trim(sector))
+                    and datetime_diff(e.start_at,to_datetime("1970-01-01 00:00:00")) != 0
+                    and datetime_diff(e.end_at,to_datetime("1970-01-01 00:00:00")) != 0
+            accum
+                foreach (key,value) in @@beforeWorkTime.get(p) do
+                    if datetime_diff(e.start_at,value) > 0 then //c.@parentV += p,
+                            p.@parentE += @@beforeWorkEdge.get(p).get(key),
+                            //c.@nextPersonCompany += (person -> [key]),
+                            p.@companyList += key,
+                            c.@parentV += p,
+                            c.@parentE += e,
+                            c.@num += 1
+                    end
+                end;
+
+    //filter the companies which not subject to the employees working timeline
+    dd = select c
+            from B3:c
+            where c.@num == 0
+            accum @@tempV += c;
+    result = {@@tempV};
+    @@tempV.clear();
+    B3 = B3 minus result;
+
+    ///5. Find the top K companies whose founders have the most successful trails.
+    Process = select c
+                        from B3:c
+                        accum @@topScoreResults += scoreResults(c,c.@num);
+    print @@topScoreResults;
+
+    foreach item in @@topScoreResults do
+            @@verSet += item.company;
+    end;
+
+    //the top K companies
+    result = {@@verSet};
+
+    //add company's funding_founds
+    B4 = select f
+            from result:c-(company_funding_rounds:e)->funding_rounds:f
+            accum @@verSet += f, @@edgeSet += e;
+
+    // trace back to the source senders from the vertexes that joint multiple paths
+    r = select c
+            from result:c
+            accum
+                @@tempV += c.@parentV, @@verSet += c.@parentV, @@edgeSet += c.@parentE;
+
+    result = {@@tempV};
+    @@tempV.clear();
+    r = select p
+            from result:p
+            accum @@edgeSet += p.@parentE,
+                    foreach item in p.@companyList do
+                        @@tempV += item, @@verSet += item
+                    end;
+
+    result = {@@tempV};
+    @@tempV.clear();
+    //clean the parent of parent
+    r = select c
+            from result:c
+            accum @@tempV += c.@parentV;
+    del = {@@tempV};
+    @@tempV.clear();
+    r = select c
+            from del:c
+            where c.@parentV.size() != 0
+            post-accum c.@parentV.clear(), c.@parentE.clear();
+    //add the parent
+    r = select c
+            from result:c
+            accum @@verSet += c.@parentV, @@edgeSet += c.@parentE;
+    result = {@@verSet};
+    print result;
+    print @@edgeSet;
+}

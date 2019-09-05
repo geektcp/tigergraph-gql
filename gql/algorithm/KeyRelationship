@@ -1,0 +1,60 @@
+CREATE QUERY KeyRelationship(vertex<Company> company, int step) FOR GRAPH EnterpriseGraph {
+	/**
+   * KeyRelationship query finds all key investors or leaders (CEO, VP, Director) of a company within several steps.
+	 *
+   * Some interesting input parameters you can try:
+   * 1. company: Hospice Mocha Frame, step: 5
+	 * 2. company: Psychoanalyst Purse Prior, step: 4
+	 * 3. company: Salad Recommendation Charlatan, step: 2
+	 * 4. company: Discipline Base Perfume, step 1
+	 * 5. company: Discipline Base Perfume, step 2
+	 * 6. company: Discipline Base Perfume, step 3
+	 * 7. company: Discipline Base Perfume, step 4
+   */
+
+  OrAccum @visited = false;
+	SetAccum<edge> @@edges;
+
+  int loopStep;
+
+  // limit the maximum traverse steps
+  IF (step > 8) THEN
+    loopStep = 8;
+  ELSE
+    loopStep = step;
+  END;
+
+
+	StartSet (any) = { company };
+
+	VertexResult = StartSet;
+
+	StartSet = 	SELECT StartSet
+						 	FROM StartSet
+							ACCUM StartSet.@visited = true;
+
+	WHILE (true) LIMIT loopStep DO
+		StartSet =	SELECT tgt
+								FROM StartSet
+										 -((WorkFor | PersonInvestCompany | reverse_CompanyInvestCompany): e)->
+										 (Person | Company): tgt
+								WHERE (
+												(
+													e.type == "WorkFor"
+												  AND
+												  (e.title == "Director" OR e.title == "CEO" OR e.title == "Vice President")
+												)
+												OR
+												e.control_type == "holding"
+											)
+											AND
+											tgt.@visited == FALSE
+								ACCUM @@edges += e
+								POST-ACCUM tgt.@visited = TRUE
+								;
+		VertexResult = VertexResult union StartSet;
+	END;
+
+	PRINT VertexResult;
+	PRINT @@edges;
+}

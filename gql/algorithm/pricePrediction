@@ -1,0 +1,137 @@
+create query pricePrediction(set<string> input, int maxIteration, bool doUpdate) for graph demo_graph
+{
+/*
+  With a set of string as input, in the format of PRODUCT_NAME,NEW_PRICE, recalculate
+  the new price for the connected BOM subgraph.
+
+  This algorithm includes two phases
+  1) traverse down to the raw materials and mark the topology order (maximum depth) for each vertex
+  2) traverse down to the raw materials again and calculate the new prices based on
+     the topology order
+
+  Sampe input
+  input:STEEL RODS,0.2
+  maxIteration: 10
+  doUpdate:false
+*/
+
+  SumAccum<int> @@depth = 0;
+  MaxAccum<int> @maxDepth = 0;
+  OrAccum @visited_1 = false;
+
+  OrAccum @isStart = false;
+
+  MapAccum<string,float> @@result;
+  MapAccum<string,float> @mapping;
+  MapAccum<string,int>   @amountMap;
+  OrAccum @visited = false;
+  SumAccum<float> @new_price;
+
+  MapAccum<vertex,double> @@inputMap;
+  SetAccum<vertex> @@startSet;
+
+  SetAccum<edge> @@displaySet;
+  SetAccum<vertex> @@displayV;
+
+  String input_key = "";
+  String input_val = "";
+
+  // parse the input strings and put them in to a vertex set
+  foreach str in input do
+    GetKeyVal(str, input_key, input_val);
+    @@inputMap += (to_vertex(input_key, "product") -> str_to_double(input_val));
+    @@startSet += to_vertex(input_key, "product");
+  end;
+
+  // traverse from the input vertexe set
+  Start = {@@startSet};
+
+  Start1 = select s from Start:s
+          accum s.@isStart = true,
+                s.@visited_1 = true,
+                s.@visited = true,
+                s.@new_price = @@inputMap.get(s)
+          post-accum s.price = @@inputMap.get(s)
+  ;
+
+  @@depth = 1;
+
+
+  // traverse down to the raw materials, each vertex will only serve as start
+  // vertex for once, and mark them with their maximum depth value
+  while (Start1.size() > 0) limit maxIteration do
+    Start1 = select u
+        from Start1:o-(usedBy)-> product:u
+        post-accum
+            // when start product is on the path of other start product
+            case when u.@isStart == true then
+                u.@maxDepth += @@depth
+            end,
+            // if first time visit just pass the depth along
+            case when u.@visited_1 == false then
+                u.@visited_1 = true
+            // keep the largest depth
+            else
+                u.@maxDepth += @@depth
+            end
+        having u.@maxDepth == 0;
+        @@depth += 1;
+  end;
+
+  // start from the input vertex set again
+  Start2 = select s from Start:s
+          where s.@maxDepth == 0;
+
+  // reset the depth
+  @@depth = 1;
+
+  // traverse down to the raw materials again, each vertex will wait
+  // until the iteration equals to its maximum depth value stored on it
+  // to calculate its new price
+  while (Start2.size() > 0) limit maxIteration do
+
+    print @@depth;
+
+    // search first
+    Start2 = select u
+      from Start2:o -(usedBy)-> product:u
+      where (u.@maxDepth == 0 or u.@maxDepth <= @@depth) and u.@visited == false ;
+
+    // then do the calculation
+    Start2 = select o
+      from Start2:o -(reverseUsedBy:e)-> product:u
+      accum case
+          when u.@visited == true then
+              o.@mapping += (e.formula_order->u.@new_price)
+          else
+              o.@mapping += (e.formula_order->u.price)
+          end
+          ,o.@amountMap += (e.formula_order->e.useAmount)
+          ,@@displaySet += e
+          ,@@displayV += u
+      post-accum
+            // dynamically evaluate the formula string stored as an attribute
+            string formula = o.formula,
+            foreach (key,val) in o.@mapping do
+              // replace the $1 string with the runtime value
+              formula = replaceStr(formula,"$"+key,to_string(val*o.@amountMap.get(key)))
+            end,
+            o.@new_price = evaluate(formula,"double"),
+
+            log(true,o.@new_price, formula, o.formula, o.name, o.@mapping),
+
+            case when doUpdate == true then
+              o.price = o.@new_price
+            end,
+            o.@visited =true
+    ;
+
+    @@depth += 1;
+  end;
+
+  print @@displaySet;
+
+  final = {@@displayV};
+
+  print final;
+}

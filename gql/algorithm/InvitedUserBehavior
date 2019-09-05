@@ -1,0 +1,49 @@
+CREATE OR REPLACE QUERY InvitedUserBehavior (VERTEX<User> inputUser) FOR GRAPH AntiFraud {
+/*
+ This query is motivated to detect those fradulent users who conduct activities to earn
+ referral bonus. How do we do that?
+
+ Given an input user, this query traverses the graph, finds out how many two-hop users that
+ are indirectely invited by the input user. That is, the users invited by the input user's
+ invitees. It also calculates the transferred total money from the one-hop invitees.
+ Finally, the traversed subgraph is returned. Intuitively, if it's a fradulent user, we
+ can tell from the money transferred from their direct invitees; and their indirect invitees
+ should be small or zero.
+
+Sample input
+  inputUser: any integer between 1 and 80,000,000
+*/
+  //declare some variables to store aggregates.
+  SumAccum<int> @@invitedPersonNum;
+  SumAccum<float> @@totalAmountSent;
+  SetAccum<edge> @@visRes;
+
+  //assign the input user to the "start" variable, which is a SET.
+  start = {inputUser};
+
+  //one-step traversal. From the start set, via the User_Refer_User edge,
+  //find all the invitees of the input user; store them into the "users" variable.
+  //Put all touched edges into a variable for visualization purpose.
+  users = SELECT t
+          FROM start:s-(User_Refer_User:e)-:t
+	  ACCUM @@visRes += e;
+
+  //Aggregate the amounts of all transactions conducted by the one-hop invitees into
+  //variable @@totalAmountSent. Also, store the traversed edges into variable  @@visRes.
+  trans = SELECT t
+          FROM users:s-((User_Transfer_Transaction):e)-:t
+          ACCUM
+            @@totalAmountSent += t.amount,
+            @@visRes += e;
+
+  //Second-hop traversal. Find users invited by the one-hop invitees.
+  //store their count in @@invitedPersonNum. And record the traversed edges into @@visRes.
+  users = SELECT t
+          FROM users:s-(User_Refer_User:e)-:t
+          WHERE t != inputUser
+          ACCUM @@visRes += e
+	        POST-ACCUM @@invitedPersonNum += 1;
+  //return 2-hop invitees count, total transfered money by 1-hop and 2-hop invitees,
+  //and the subgraph.
+  PRINT @@invitedPersonNum, @@totalAmountSent, @@visRes;
+}

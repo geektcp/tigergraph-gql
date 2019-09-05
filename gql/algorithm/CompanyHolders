@@ -1,0 +1,58 @@
+CREATE QUERY CompanyHolders(vertex<Company> company, uint step) FOR GRAPH EnterpriseGraph {
+  /**
+   * CompanyHolders query finds all key investors of a company within several steps.
+	 *
+   * Some interesting input parameters you can try:
+   * 1. company: Hospice Mocha Frame, step: 5
+	 * 2. company: Psychoanalyst Purse Prior, step: 4
+	 * 3. company: Salad Recommendation Charlatan, step: 2
+	 * 4. company: Discipline Base Perfume, step 1
+	 * 5. company: Discipline Base Perfume, step 2
+	 * 6. company: Discipline Base Perfume, step 3
+	 * 7. company: Discipline Base Perfume, step 4
+   */
+
+	// @visited is used to mark visited vertices
+  OrAccum @visited = false;
+	// @@edges is used to hold all touched edges
+  SetAccum<edge> @@edges;
+
+  int loopStep;
+
+  // limit the maximum traverse steps
+  IF (step > 8) THEN
+    loopStep = 8;
+  ELSE
+    loopStep = step;
+  END;
+
+  // Start from the input company
+  StartSet (any) = { company };
+
+	// VertexResults contains all vertices we touched during traversal
+  VertexResult = StartSet;
+
+	// Mark input company as visited
+  StartSet =  SELECT StartSet
+              FROM StartSet
+              ACCUM StartSet.@visited = true;
+
+	// Traverse multiple steps
+  WHILE (true) LIMIT loopStep DO
+		// Find the investors (either people or companies) that is a key investor (control_type == "holding")
+    StartSet =  SELECT tgt
+                FROM StartSet
+                     -((PersonInvestCompany | reverse_CompanyInvestCompany): e)->
+                     (Person | Company): tgt
+                WHERE (e.control_type == "holding") AND tgt.@visited == FALSE
+                ACCUM @@edges += e
+                POST-ACCUM tgt.@visited = TRUE
+                ;
+		// Merge touched vertices into the result
+    VertexResult = VertexResult union StartSet;
+  END;
+
+	// Print result as a graph
+  PRINT VertexResult;
+  PRINT @@edges;
+}
