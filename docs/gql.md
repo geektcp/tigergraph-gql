@@ -29,7 +29,8 @@ startpoint = to_vertex("c4", "company");
 
 ## filter关键字
 ```
-跟arangodb的filter不同，这不是一个通用过滤器，只能在伴随neighbors和neighborAttribute这两个函数时过滤,而且只能在ACCUM语句块中使用：
+跟arangodb的filter不同，这不是一个通用过滤器，只能在伴随neighbors和neighborAttribute这两个函数时过滤,
+而且只能在ACCUM语句块中使用：
 s.neighbors().filter(true),
 v.@diffCountry += v.neighborAttribute("worksFor", "company", "id")
 .filter(v.locationId != company.country),
