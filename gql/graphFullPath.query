@@ -1,0 +1,98 @@
+USE GRAPH %s
+CREATE QUERY graphFullPath() FOR GRAPH %s {
+    VERTEX startpoint;
+    VERTEX endpoint;
+    INT graph_depth, result_depth;
+
+    OrAccum @@found_start  = FALSE;
+    OrAccum @@found_end  = FALSE;
+    AndAccum @@found  = TRUE;
+
+    OrAccum @notSeen = TRUE;
+
+    SetAccum<VERTEX> @nextVetexes;
+    SetAccum<EDGE> @nextEdges;
+
+    SetAccum<VERTEX> @lastVetexes;
+    SetAccum<EDGE> @lastEdges;
+
+    SetAccum<VERTEX> @@vertexes;
+    SetAccum<EDGE> @@edges;
+
+    MapAccum<VERTEX, SetAccum<VERTEX>> @@mapVertex;
+    MapAccum<VERTEX, SetAccum<EDGE>> @@mapEdge;
+
+    MapAccum<VERTEX, SetAccum<VERTEX>> @@mapVertexReverse;
+    MapAccum<VERTEX, SetAccum<EDGE>> @@mapEdgeReverse;
+
+    SetAccum<VERTEX> @@tmppoint;
+    SetAccum<VERTEX> @@tmpkeys;
+
+    SetAccum<VERTEX> @@startlist;
+    SetAccum<VERTEX> @@endlist;
+
+    graph_depth = 6;
+    result_depth = graph_depth * 2;
+    startpoint = to_vertex("p7", "persons");
+    endpoint = to_vertex("s4", "skill");
+    @@startlist += startpoint;
+    @@endlist += endpoint;
+    Start (ANY) = {@@startlist};
+
+    result = SELECT v
+        FROM Start:v
+        ACCUM v.@notSeen = FALSE;
+
+    WHILE TRUE LIMIT graph_depth DO
+        Start = SELECT t
+            FROM Start:s - (:e) -> :t
+                WHERE t.@notSeen // and e.type !="all_to_skill"
+                ACCUM t.@notSeen = FALSE,
+                      t.@lastVetexes += s,
+                      t.@lastEdges += e,
+                      s.@nextVetexes += t,
+                      s.@nextEdges += e
+                  POST-ACCUM
+                      @@mapVertex += (t -> t.@lastVetexes),
+                      @@mapEdge += (t -> t.@lastEdges),
+                      @@mapVertexReverse += (s -> s.@nextVetexes),
+                      @@mapEdgeReverse += (s -> s.@nextEdges);
+    END;
+
+    @@tmppoint += endpoint;
+    @@vertexes += endpoint;
+    WHILE TRUE LIMIT result_depth DO
+        @@tmpkeys.clear();
+        FOREACH key in @@tmppoint DO
+            IF(@@mapVertex.containsKey(key)) THEN
+                @@tmpkeys += @@mapVertex.get(key);
+                @@vertexes += @@mapVertex.get(key);
+                @@edges += @@mapEdge.get(key);
+                  END;
+            IF(@@mapVertexReverse.containsKey(key)) THEN
+                @@tmpkeys += @@mapVertexReverse.get(key);
+                @@vertexes += @@mapVertexReverse.get(key);
+                @@edges += @@mapEdgeReverse.get(key);
+            END;
+        END;
+        @@tmppoint = @@tmpkeys;
+    END;
+
+    FOREACH point in @@startlist DO
+        IF(@@vertexes.contains(point)) THEN
+            @@found_start += TRUE;
+        END;
+    END;
+    FOREACH point in @@endlist DO
+        IF(@@vertexes.contains(point)) THEN
+            @@found_end += TRUE;
+        END;
+    END;
+
+    @@found += @@found_start;
+    @@found += @@found_end;
+    PRINT @@found;
+    PRINT @@edges;
+    PRINT @@vertexes;
+}
+INSTALL QUERY graphFullPath

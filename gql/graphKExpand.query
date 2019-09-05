@@ -1,0 +1,89 @@
+CREATE QUERY graphKExpand (String gdbQuery) FOR GRAPH work_graph {
+    /*
+        this is a test filter for the parameter
+        K expand with advanced filter
+    */
+    JSONOBJECT filter_object, filter_start_vertex, filter_end_vertex, filter_tmp;
+    INT filter_depth, filter_maxSize, i, j;
+    JSONARRAY filter_start_vertices,filter_end_vertices, filter_vertex_types, filter_edge_types;
+    STRING filter_direction, filter_expression, objectKey, schema;
+
+    ListAccum<VERTEX> @accum_path;
+    ListAccum<STRING> @accum_type;
+
+    SetAccum<STRING> @@accum_vertex_types;
+    SetAccum<STRING> @@accum_edge_types;
+    SetAccum<EDGE> @@accum_edges_result;
+    ListAccum<STRING> @@filter_value;
+
+    SetAccum<VERTEX> @@accum_start_vertices;
+    SetAccum<VERTEX> @@accum_end_vertices;
+
+    SetAccum<STRING> @@objectKeys;
+    SetAccum<STRING> @@objectSchemas;
+
+    // PRINT gdbQuery;
+    filter_object = parse_json_object( gdbQuery );
+    IF(filter_object.containsKey("startVertices")) THEN filter_start_vertices = filter_object.getJsonArray("startVertices"); END;
+    IF(filter_object.containsKey("endVertices")) THEN filter_end_vertices = filter_object.getJsonArray("endVertices"); END;
+    IF(filter_object.containsKey("vertexTables")) THEN filter_vertex_types = filter_object.getJsonArray("vertexTables"); END;
+    IF(filter_object.containsKey("edgeTables")) THEN filter_edge_types = filter_object.getJsonArray("edgeTables"); END;
+    IF(filter_object.containsKey("direction")) THEN filter_direction = filter_object.getString("direction"); END;
+    IF(filter_object.containsKey("maxDepth")) THEN filter_depth = filter_object.getInt("maxDepth"); END;
+    IF(filter_object.containsKey("maxSize")) THEN filter_maxSize = filter_object.getInt("maxSize"); END;
+    IF(filter_object.containsKey("filterExpression")) THEN filter_expression = filter_object.getString("filterExpression"); END;
+
+    j = 0;
+    WHILE(j < filter_start_vertices.size()) DO
+        filter_start_vertex = filter_start_vertices.getJsonObject(j);
+          @@objectKeys.clear();
+          @@objectKeys += filter_start_vertex.getString("objectKey");
+          schema = filter_start_vertex.getString("schema");
+          @@accum_start_vertices = @@accum_start_vertices UNION to_vertex_set(@@objectKeys, schema);
+        j += 1;
+    END;
+
+    j = 0;
+    WHILE(j < filter_end_vertices.size()) DO
+        filter_end_vertex = filter_end_vertices.getJsonObject(j);
+          @@objectKeys.clear();
+          @@objectKeys += filter_start_vertex.getString("objectKey");
+          schema = filter_start_vertex.getString("schema");
+        @@accum_end_vertices = @@accum_end_vertices UNION to_vertex_set(@@objectKeys, schema);
+        j += 1;
+    END;
+
+	  j = 0;
+    WHILE(j < filter_vertex_types.size()) DO
+        @@accum_vertex_types += filter_vertex_types.getString(j);
+        j += 1;
+    END;
+    j = 0;
+    WHILE(j < filter_edge_types.size()) DO
+        @@accum_edge_types += filter_edge_types.getString(j);
+        j += 1;
+    END;
+
+    source = { @@accum_start_vertices };
+    result = { @@accum_start_vertices };
+
+    WHILE( source.size()>0 AND result.size() < filter_maxSize) LIMIT filter_depth DO
+            source = SELECT t
+                FROM source:s -(:e)-> :t
+                WHERE @@accum_vertex_types.contains(e.type)
+	                  AND @@accum_edge_types.contains(t.type)
+	                  AND evaluate(filter_expression)
+                ACCUM @@accum_edges_result += e;
+            result = result UNION source;
+        END;
+        PRINT result as vertices;
+        PRINT @@accum_edges_result AS edges;
+	
+	      if(filter_direction == "INBOUND") THEN
+	          print "INBOUND";
+	      ELSE IF(filter_direction == "OUTBOUND") THEN
+	          PRINT "OUTBOUND";
+	      END;
+	      
+    END;
+}
