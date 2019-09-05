@@ -1,0 +1,68 @@
+USE GRAPH work_graph
+CREATE QUERY socialfind () FOR GRAPH work_graph {
+        MapAccum<int, int> @@edgeCntWithinCluster;
+        MapAccum<int, int> @@edgeCntIncidentCluster;
+        MapAccum<int, int> @@compSizes;
+        MapAccum<int, int> @clusterEdgeCnt;
+
+        SumAccum<int> @@totalNumEdges;
+        SumAccum<int> @edgeCnt;
+        SumAccum<int> @cluster;
+        SumAccum<float> @deltaQ;
+        OrAccum @@changed;
+
+        Start = {ANY};
+        Start = SELECT s
+                FROM Start:s -(:e)-> :t
+                ACCUM @@totalNumEdges += 1,
+                      s.@edgeCnt += 1
+                POST-ACCUM s.@cluster = getvid(s);
+        @@changed = true;
+
+        WHILE @@changed == true DO
+                @@changed = false;
+                Start = SELECT s
+                        FROM Start:s -(:e)-> :t
+                        ACCUM s.@clusterEdgeCnt += (t.@cluster->1),
+                              IF s.@cluster != t.@cluster THEN
+                                      @@edgeCntIncidentCluster += (s.@cluster->1)
+                              ELSE
+                                      @@edgeCntWithinCluster += (s.@cluster->1)
+                              END
+                        POST-ACCUM
+                                INT resultCluster = s.@cluster,
+                                INT m = @@totalNumEdges,
+                                FLOAT maxDeltaQ = -999,
+                                FLOAT deltaQ_new = 0,
+                                FOREACH (cluster, edgeCnt) IN s.@clusterEdgeCnt DO
+                                        INT within = @@edgeCntWithinCluster.get(cluster),
+                                        INT incident = @@edgeCntIncidentCluster.get(cluster),
+                                        deltaQ_new = ((within + s.@clusterEdgeCnt.get(cluster)) / (2.0*m))
+                                                     - pow((incident + s.@edgeCnt)/(2.0*m),2)
+                                                     - (within / (2.0*m)
+                                                     - pow((incident/(2.0*m)),2)
+                                                     - pow((s.@edgeCnt/(2.0*m)),2)),
+                                        IF deltaQ_new > maxDeltaQ AND deltaQ_new > s.@deltaQ AND deltaQ_new > 0 THEN
+                                                maxDeltaQ = deltaQ_new,
+                                                resultCluster = cluster
+                                        END
+                                END,
+                                IF s.@cluster != resultCluster THEN
+                                        s.@cluster = resultCluster,
+                                        s.@deltaQ = maxDeltaQ,
+                                        @@changed += true
+                                END,
+                                s.@clusterEdgeCnt.clear()
+                        ;
+                @@edgeCntWithinCluster.clear();
+                @@edgeCntIncidentCluster.clear();
+        END;
+
+        Start = {ANY};
+
+        Start = SELECT s FROM Start:s
+                POST-ACCUM @@compSizes += (s.@cluster -> 1);
+        PRINT @@compSizes;
+        PRINT Start.@cluster;
+}
+INSTALL QUERY socialfind

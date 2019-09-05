@@ -1,0 +1,35 @@
+RUSE GRAPH work_graph
+CREATE QUERY shortest_path_1D (VERTEX<company> S, VERTEX<company> T, INT maxDepth) FOR GRAPH work_graph{
+
+  OrAccum @@found  = false;
+  OrAccum @notSeen = true;
+  ListAccum<STRING>  @pathResult;
+  Start (ANY) = {S};
+  Start = SELECT v
+    FROM Start:v
+    //assume each vertex has an id attribute
+    ACCUM v.@notSeen = false, v.@pathResult = v.id;
+
+  WHILE NOT @@found LIMIT maxDepth DO
+    Start = SELECT v
+      FROM Start - (:e) -> :v
+      WHERE v.@notSeen
+      ACCUM v.@notSeen = false,
+            //add partial result paths to target v. v2.0 ListAccum requires FOREACH.
+            FOREACH path IN Start.@pathResult DO
+                v.@pathResult += (path + "-" + v.id)
+            END,
+            CASE WHEN v == T
+              THEN @@found += true
+            END;
+  END;
+
+  IF @@found THEN
+    Result = {T};
+    #PRINT Result.@pathResult;         #JSON output API version v1
+    PRINT Result [Result.@pathResult]; #JSON output API version v2
+  ELSE
+    PRINT "Can't find shortest path within max steps";
+  END;
+}
+INSTALL QUERY shortest_path_1D
